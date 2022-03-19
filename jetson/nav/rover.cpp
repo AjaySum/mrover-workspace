@@ -13,8 +13,11 @@ Rover::RoverStatus::RoverStatus()
     mAutonState.is_auton = false;
     // {-1, 0, 0} refers to the struct of an empty Target
     // which means distance = -1, bearing = 0, id = 0
-    mCTargetLeft = {-1, 0, 0};
-    mCTargetRight = {-1, 0, 0};
+    mCTargetLeft = {-1.0, 0, 0};
+    mCTargetRight = {-1.0, 0, 0};
+    mObstacle = {0, 0, -1.0}; // empty obstacle --> distance is  -1
+    mTargetLeft = {-1.0, 0, 0};
+    mTargetRight = {-1.0, 0, 0};
 } // RoverStatus()
 
 // Gets a reference to the rover's current navigation state.
@@ -64,6 +67,16 @@ Target& Rover::RoverStatus::rightTarget()
     return mTargetRight;
 } // rightTarget()
 
+Target& Rover::RoverStatus::leftCacheTarget()
+{
+    return mCTargetLeft;
+} // leftCacheTarget()
+
+Target& Rover::RoverStatus::rightCacheTarget() 
+{
+    return mCTargetRight;
+} // rightCacheTarget()
+
 unsigned Rover::RoverStatus::getPathTargets()
 {
   return mPathTargets;
@@ -101,8 +114,12 @@ Rover::RoverStatus& Rover::RoverStatus::operator=( Rover::RoverStatus& newRoverS
     }
     mObstacle = newRoverStatus.obstacle();
     mOdometry = newRoverStatus.odometry();
-    mTarget1 = newRoverStatus.target();
-    mTarget2 = newRoverStatus.target2();
+    mTargetLeft = newRoverStatus.leftTarget();
+    mTargetRight = newRoverStatus.rightTarget();
+    mCTargetLeft = newRoverStatus.leftCacheTarget();
+    mCTargetRight = newRoverStatus.rightCacheTarget();
+    countLeftMisses = newRoverStatus.getLeftMisses();
+    countRightMisses = newRoverStatus.getRightMisses();
     return *this;
 } // operator=
 
@@ -154,9 +171,8 @@ DriveStatus Rover::drive( const double distance, const double bearing, const boo
 
     if( fabs( destinationBearing - mRoverStatus.odometry().bearing_deg ) < mRoverConfig[ "navThresholds" ][ "drivingBearing" ].GetDouble() )
     {
-        double distanceEffort = mDistancePid.update( -1 * distance, 0 );
         double turningEffort = mBearingPid.update( mRoverStatus.odometry().bearing_deg, destinationBearing );
-        publishJoystick( distanceEffort, turningEffort, false );
+        publishJoystick( 1.0, turningEffort, false );
         return DriveStatus::OnCourse;
     }
     cerr << "offcourse\n";
@@ -172,9 +188,8 @@ void Rover::drive( const int direction, const double bearing )
 {
     double destinationBearing = mod( bearing, 360 );
     throughZero( destinationBearing, mRoverStatus.odometry().bearing_deg );
-    const double distanceEffort = mDistancePid.update( -1 * direction, 0 );
     const double turningEffort = mBearingPid.update( mRoverStatus.odometry().bearing_deg, destinationBearing );
-    publishJoystick( distanceEffort, turningEffort, false );
+    publishJoystick( 1.0, turningEffort, false );
 } // drive()
 
 // Sends a joystick command to turn the rover toward the destination
@@ -247,7 +262,49 @@ bool Rover::updateRover( RoverStatus newRoverStatus )
         {
             mRoverStatus.obstacle() = newRoverStatus.obstacle();
             mRoverStatus.odometry() = newRoverStatus.odometry();
-            mRoverStatus.target() = newRoverStatus.target();
+            mRoverStatus.leftTarget() = newRoverStatus.leftTarget();
+            mRoverStatus.rightTarget() = newRoverStatus.rightTarget();
+
+            // Cache Left Target if we had detected one
+            if( mRoverStatus.leftTarget().distance != mRoverConfig[ "navThresholds" ][ "noTargetDist" ].GetDouble() ) 
+            {
+                mRoverStatus.leftCacheTarget() = mRoverStatus.leftTarget();
+                mRoverStatus.getLeftMisses() = 0;
+
+                // Cache Right Target if we had detected one (only can see right if we see the left one, otherwise
+                // results in some undefined behavior)
+                if( mRoverStatus.rightTarget().distance != mRoverConfig[ "navThresholds" ][ "noTargetDist" ].GetDouble() ) 
+                {
+                    mRoverStatus.rightCacheTarget() = mRoverStatus.rightTarget();
+                    mRoverStatus.getRightMisses() = 0;
+                }
+                else 
+                {
+                    mRoverStatus.getRightMisses()++;
+                }
+            }
+            else 
+            { 
+                mRoverStatus.getLeftMisses()++;
+                mRoverStatus.getRightMisses()++; // need to increment since we don't see both
+            }
+
+            // Check if we need to reset left cache
+            if( mRoverStatus.getLeftMisses() > mRoverConfig[ "navThresholds" ][ "cacheMissMax" ].GetDouble() )
+            {
+                mRoverStatus.getLeftMisses() = 0;
+                // Set to empty target
+                mRoverStatus.leftCacheTarget() = {-1, 0, 0};
+            }
+
+            // Check if we need to reset right cache
+            if( mRoverStatus.getRightMisses() > mRoverConfig[ "navThresholds" ][ "cacheMissMax" ].GetDouble() )
+            {
+                mRoverStatus.getRightMisses() = 0;
+                // Set to empty target
+                mRoverStatus.rightCacheTarget() = {-1, 0, 0};
+            }
+            
             return true;
         }
         return false;

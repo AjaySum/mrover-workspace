@@ -130,10 +130,6 @@ export default {
   },
 
   computed: {
-    ...mapGetters('autonomy', {
-      autonEnabled: 'autonEnabled'
-    }),
-
     ...mapGetters('controls', {
       controlMode: 'controlMode'
     }),
